@@ -1,0 +1,8 @@
+{
+  "properties": {
+    "description": "app-products-service-dev",
+    "protocol": "http",
+    "resourceId": "https://management.azure.com/subscriptions/6d972db7-9d22-43d5-80ed-97e5c8b09291/resourceGroups/rg-apimdemo-productsservice-dev/providers/Microsoft.Web/sites/app-products-service-dev",
+    "url": "https://app-products-service-dev.azurewebsites.net"
+  }
+}

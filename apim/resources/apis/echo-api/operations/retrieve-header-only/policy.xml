@@ -1,0 +1,16 @@
+<policies>
+	<inbound>
+		<base />
+	</inbound>
+	<backend>
+		<base />
+	</backend>
+	<outbound>
+		<base />
+		<set-header name="X-My-Sample" exists-action="override">
+			<value>This is a sample</value>
+			<!-- for multiple headers with the same name add additional value elements -->
+		</set-header>
+		<jsonp callback-parameter-name="ProcessResponse" />
+	</outbound>
+</policies>

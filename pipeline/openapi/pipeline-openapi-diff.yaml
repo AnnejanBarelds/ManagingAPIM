@@ -1,0 +1,202 @@
+parameters:
+  - name: SourceBranch
+    type: string
+    default: refs/heads/main
+  - name: ApplicationName
+    type: string
+  - name: ApplicationDisplayName
+    type: string
+  - name: ArtifactTag
+    type: string
+    default: openapi-artifact
+  - name: OverrideTag
+    type: string
+    default: ignore_openapi_diff
+  - name: OpenAPIFileNamePattern
+    type: string
+    default: '**/openapi*.yml'
+  - name: NpmFeed
+    type: string
+
+steps:
+- task: PullRequestStatus@0
+  displayName: 'Prepare openapi-diff PR status'
+  condition: and(succeeded(), and(eq(variables['Build.Reason'], 'PullRequest'), eq(variables['System.PullRequest.TargetBranch'], '${{ parameters.SourceBranch }}')))
+  inputs:
+    action: 'Create'
+    name: '${{ lower(parameters.ApplicationName) }}-openapi-diff'
+    state: 'pending'
+
+- task: PowerShell@2
+  displayName: 'Get most recent build to publish OpenAPI specifications'
+  inputs:
+    targetType: 'inline'
+    script: |
+      $authHeader = @{ Authorization = "Bearer $env:SYSTEM_ACCESSTOKEN" }
+      $buildIdUrl = "$(System.CollectionUri)/$(System.TeamProject)/_apis/build/builds?definitions=$(System.DefinitionId)&queryOrder=queueTimeDescending&branchName=${{ parameters.SourceBranch }}&tagFilters=${{ parameters.ArtifactTag }}&api-version=4.1"
+      $builds = Invoke-RestMethod -Uri $buildIdUrl -Method get -Headers $authHeader
+      $buildId = $builds.value[0].id
+      Write-Host "##vso[task.setvariable variable=OpenAPIBuildId;]$buildId"
+    failOnStderr: true
+  env:
+    SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+
+- task: DownloadBuildArtifacts@1
+  displayName: 'Download most recent OpenAPI specifications'
+  condition: and(succeeded(), ne(variables.OpenAPIBuildId, ''))
+  inputs:
+    buildType: 'specific'
+    allowPartiallySucceededBuilds: true
+    project: '$(System.TeamProjectId)'
+    pipeline: '$(System.DefinitionId)'
+    downloadType: 'single'
+    artifactName: 'OpenAPI'
+    buildId: '$(OpenAPIBuildId)'
+    buildVersionToDownload: 'specific'
+    downloadPath: $(Agent.BuildDirectory)
+    checkDownloadedFiles: true
+  continueOnError: true 
+
+- task: Npm@1
+  displayName: Install openapi-diff
+  inputs:
+    command: 'custom'
+    customCommand: 'install -g openapi-diff --save-dev'
+    customRegistry: 'useFeed'
+    customFeed: ${{ parameters.NpmFeed }}
+    workingDir: $(Agent.BuildDirectory)
+
+- task: CopyFiles@2
+  displayName: 'Copy OpenAPI files'
+  inputs:
+    SourceFolder: '$(Build.SourcesDirectory)'
+    Contents: ${{ parameters.OpenAPIFileNamePattern }}
+    TargetFolder: '$(build.artifactstagingdirectory)/OpenAPI'
+
+- task: PowerShell@2
+  displayName: 'Compare OpenAPI spec files'
+  inputs:
+    targetType: 'inline'
+    script: |
+      $sourceFolder = "$(Agent.BuildDirectory)/OpenAPI"
+      $destFolder = "$(build.artifactstagingdirectory)/OpenAPI"
+      $returnCode = 0
+      if ((-not (Test-Path $sourceFolder)) -And (-not (Test-Path $destFolder))) {
+          Write-Host "Nothing to do; no existing OpenAPI specification files found, and none in the current branch"
+          $returnCode = ''
+      }
+      elseif (-not (Test-Path $sourceFolder)) {
+          Write-Host "Nothing to do; no existing OpenAPI specification files found"
+      }
+      else {
+          $sourceFiles = Get-ChildItem $sourceFolder -Recurse -File | Select-Object FullName,@{l="Name";e={$_.FullName.Replace($sourceFolder, "")}}
+          if ($sourceFiles -eq $null) {
+              Write-Host "Nothing to do; no existing OpenAPI specification files found"
+          }
+          else {
+              if (-not (Test-Path $destFolder)) {
+                  $returnCode = -1
+                  Write-Warning "Found existing OpenAPI specification files, but none in the current branch"
+                  Write-Host "##vso[task.logissue type=error;]Found existing OpenAPI specification files, but none in the current branch"
+              }
+              else {
+                  $destFiles = Get-ChildItem $destFolder -Recurse -File | Select-Object FullName,@{l="Name";e={$_.FullName.Replace($destFolder, "")}}
+                  if ($destFiles -eq $null) {
+                      $returnCode = -1
+                      Write-Warning "Found existing OpenAPI specification files, but none in the current branch"  
+                      Write-Host "##vso[task.logissue type=error;]Found existing OpenAPI specification files, but none in the current branch"
+                  }
+                  else {
+                      $comparison = Compare-Object $sourceFiles $destFiles -Property Name -IncludeEqual
+                      $comparison | Where-Object { $_.SideIndicator -eq "<=" } | ForEach-Object {
+                          $returnCode = -1;
+                          Write-Warning "Existing specification file $($_.Name) found, but it's not available in the current branch"
+                          Write-Host "##vso[task.logissue type=error;]Existing specification file $($_.Name) found, but it's not available in the current branch"
+                      }
+                      $comparison | Where-Object { $_.SideIndicator -eq "==" } | ForEach-Object {
+                          $sourceFile = Join-Path $sourceFolder $_.Name;
+                          $destFile = Join-Path $destFolder $_.Name;
+                          Write-Host "Validating $destFile against $sourceFile..."
+                          $diffresult=/usr/local/lib/node_modules/openapi-diff/bin/openapi-diff $sourceFile $destFile
+                          $innerReturnCode = $LASTEXITCODE
+                          echo "$diffresult"
+                          if ($innerReturnCode -ne 0) {
+                            Write-Warning "Breaking API changes detected in $($_.Name)"
+                            Write-Host "##vso[task.logissue type=error;]Breaking API changes detected in $($_.Name)"
+                          }
+                          if ($returnCode -eq 0) { $returnCode = $innerReturnCode }
+                      }
+                  }
+              }
+          }
+      }
+      if ([string]$returnCode) {
+        echo "##vso[task.setvariable variable=diffresultcode]$returnCode"
+        if ($returnCode -ne 0) {
+          Write-Host "##vso[task.complete result=SucceededWithIssues;]"
+        }
+      }
+    workingDirectory: '$(Agent.BuildDirectory)'
+    failOnStderr: true
+
+- task: PullRequestStatus@0
+  displayName: 'Set openapi-diff PR status to succeeded'
+  condition: and(succeeded(), and(and(eq(variables['Build.Reason'], 'PullRequest'), eq(variables['System.PullRequest.TargetBranch'], '${{ parameters.SourceBranch }}')), eq(variables.diffresultcode, '0')))
+  inputs:
+    action: 'Update'
+    name: '${{ lower(parameters.ApplicationName) }}-openapi-diff'
+    state: 'succeeded'
+    description: '${{ parameters.ApplicationDisplayName }} OpenAPI Diff succeeded'
+
+- task: PullRequestTags@0
+  condition: and(succeeded(), and(and(eq(variables['Build.Reason'], 'PullRequest'), eq(variables['System.PullRequest.TargetBranch'], '${{ parameters.SourceBranch }}')), ne(variables.diffresultcode, '0')))
+  displayName: 'Check whether to ignore openapi-diff PR status'
+  inputs:
+    action: 'check'
+    tag: '${{ parameters.OverrideTag }}'
+    outputVariable: 'ignoreOpenAPIDiff'
+
+- task: PullRequestStatus@0
+  displayName: 'Set openapi-diff PR status to failed'
+  condition: and(succeeded(), and(and(and(eq(variables['Build.Reason'], 'PullRequest'), eq(variables['System.PullRequest.TargetBranch'], '${{ parameters.SourceBranch }}')), ne(variables.diffresultcode, '0')), ne(variables.ignoreOpenAPIDiff, 'true')))
+  inputs:
+    action: 'Update'
+    name: '${{ lower(parameters.ApplicationName) }}-openapi-diff'
+    state: 'failed'
+    description: '${{ parameters.ApplicationDisplayName }} OpenAPI Diff failed; breaking API changes detected. Either remove the breaking changes from the PR, or set the ${{ parameters.OverrideTag }} tag and re-queue the build to bypass this check'
+
+- task: PullRequestStatus@0
+  displayName: 'Ignore openapi-diff PR status'
+  condition: and(succeeded(), and(and(and(eq(variables['Build.Reason'], 'PullRequest'), eq(variables['System.PullRequest.TargetBranch'], '${{ parameters.SourceBranch }}')), ne(variables.diffresultcode, '0')), eq(variables.ignoreOpenAPIDiff, 'true')))
+  inputs:
+    action: 'Update'
+    name: '${{ lower(parameters.ApplicationName) }}-openapi-diff'
+    state: 'notApplicable'
+    description: '${{ parameters.ApplicationDisplayName }} OpenAPI Diff failed, but this result is ignored because the ${{ parameters.OverrideTag }} tag is present'
+
+- task: PublishBuildArtifacts@1
+  displayName: Publish OpenAPI files
+  condition: and(and(succeeded(), ne(variables['Build.Reason'], 'PullRequest')), ne(variables.diffresultcode, ''))
+  inputs:
+    PathtoPublish: '$(Build.ArtifactStagingDirectory)/OpenAPI'
+    ArtifactName: 'OpenAPI'
+
+- task: PowerShell@2
+  displayName: 'Set artifact tag on build'
+  condition: and(and(succeeded(), ne(variables['Build.Reason'], 'PullRequest')), ne(variables.diffresultcode, ''))
+  inputs:
+    targetType: 'inline'
+    script: |
+      $authHeader = @{ Authorization = "Bearer $env:SYSTEM_ACCESSTOKEN" }
+      $tagBuildUrl = "$(System.CollectionUri)/$(System.TeamProject)/_apis/build/builds/$(Build.BuildId)/tags/${{ parameters.ArtifactTag }}?&api-version=4.1"
+      Invoke-RestMethod -Uri $tagBuildUrl -Method put -Headers $authHeader
+    failOnStderr: true
+  env:
+    SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+
+- task: DeleteFiles@1
+  displayName: Clean up OpenAPI files
+  inputs:
+    SourceFolder: '$(Build.ArtifactStagingDirectory)/OpenAPI'
+    Contents: '*'
+    RemoveSourceFolder: true

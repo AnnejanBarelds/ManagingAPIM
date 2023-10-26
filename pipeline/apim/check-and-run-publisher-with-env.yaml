@@ -1,0 +1,132 @@
+parameters:
+- name: VARIABLEGROUP
+  type: string
+- name: ENVIRONMENT
+  type: string
+- name: API_MANAGEMENT_SERVICE_OUTPUT_FOLDER_PATH
+  type: string
+- name: CONFIGURATION_YAML_PATH
+  type: string
+- name: BACKEND_VERSION_YAML_PATH
+  type: string
+- name: COMMIT_ID
+  type: string
+
+jobs:
+- job: version_check
+  displayName: Check backend versions
+  variables:
+    - group: ${{ parameters.VARIABLEGROUP }}
+  steps:
+  - ${{ if ne(parameters.CONFIGURATION_YAML_PATH, '') }}:
+    - task: qetza.replacetokens.replacetokens-task.replacetokens@3
+      displayName: "Perform namevalue secret substitution in ${{ parameters.CONFIGURATION_YAML_PATH }}"
+      inputs:
+        targetFiles: $(Build.SourcesDirectory)/${{ parameters.CONFIGURATION_YAML_PATH }}
+        encoding: "auto"
+        writeBOM: true
+        verbosity: "off"
+        actionOnMissing: "warn"
+        keepToken: false
+        tokenPrefix: "{#"
+        tokenSuffix: "#}"
+  - task: AzureCLI@2
+    name: retrieve_backend_versions
+    displayName: Retrieve backend versions
+    inputs:
+      azureSubscription: $(SERVICE_CONNECTION_NAME)
+      scriptType: pscore
+      scriptLocation: inlineScript
+      inlineScript: |
+        $backendsFolderPath = Join-Path $env:API_MANAGEMENT_SERVICE_OUTPUT_FOLDER_PATH "backends"
+        $publisherConfigurationPath = $env:CONFIGURATION_YAML_PATH
+        $backendVersionFilePath = $env:BACKEND_VERSION_YAML_PATH
+        if ((Test-Path -Path $backendVersionFilePath) -eq $true) {
+          Install-Module powershell-yaml -Scope CurrentUser -Force
+          $backendsToCheck = @()
+          $backendVersions = Get-Content $backendVersionFilePath -Raw | ConvertFrom-Yaml -Ordered
+          $publisherConfig = Get-Content $publisherConfigurationPath -Raw | ConvertFrom-Yaml -Ordered
+          $pattern = '(.*)(/subscriptions/)(.)'
+          Get-ChildItem $backendsFolderPath -Directory | ForEach-Object {    
+              $backend = $backendVersions.backendVersions | Where-Object name -eq $_.Name
+              $version = $backend.version
+              if ($version) {
+                  $backendConfig = $publisherConfig.backends | Where-Object name -eq $_.Name
+                  if ($backend -ne $null) {
+                      $resourceId = $backendConfig.properties.resourceId
+                  }
+                  else {
+                      $propertiesFile = Join-Path $_.FullName 'backendInformation.json'
+                      $backendProperties = Get-Content $propertiesFile | ConvertFrom-Json
+                      $resourceId = $backendProperties.properties.resourceId
+                  }
+                  $resourceId = $resourceId -replace $pattern,'$2$3'
+                  $currentVersion = ''
+                  try {
+                      $currentVersion = az tag list --resource-id $resourceId --query "properties.tags.Version" --out tsv
+                  }
+                  catch {
+                      Write-Host "Error while reading version from backend $($_.Name) with resourceId $resourceId. Does the backend resource exist?"
+                      $backendsToCheck += $_.Name
+                  }
+                  if ($currentVersion) {
+                      if ($version -gt $currentVersion) {
+                          Write-Host "Backend $($_.Name) seems to be running an older version; version $currentVersion found, while at least $version was expected"
+                          $backendsToCheck += $_.Name
+                      } else {
+                          Write-Host "Backend $($_.Name) looks OK"
+                      }
+                  }
+                  else {
+                      Write-Host "No version found on backend $($_.Name)"
+                      $backendsToCheck += $_.Name
+                  }
+              }
+          }
+          $backends = $backendsToCheck -join "; "
+          if ($backends) {
+              $instruction = "Please verify whether the underlying resources for the following backends are available and up-to-date on the target environment: $backends"
+              Write-Host "$instruction"
+              Write-Host "##vso[task.setvariable variable=reviewinstruction;isoutput=true]$instruction"
+          }
+          exit 0
+        }
+    env:
+      API_MANAGEMENT_SERVICE_OUTPUT_FOLDER_PATH: $(Build.SourcesDirectory)/${{ parameters.API_MANAGEMENT_SERVICE_OUTPUT_FOLDER_PATH }}
+      CONFIGURATION_YAML_PATH: $(Build.SourcesDirectory)/${{ parameters.CONFIGURATION_YAML_PATH }}
+      BACKEND_VERSION_YAML_PATH: $(Build.SourcesDirectory)/${{ parameters.BACKEND_VERSION_YAML_PATH }}
+- job: verify_backends
+  displayName: Manually verify backends
+  dependsOn: version_check
+  variables:
+    reviewinstruction: $[ dependencies.version_check.outputs['retrieve_backend_versions.reviewinstruction'] ] 
+  pool: server
+  timeoutInMinutes: 4320
+  steps:
+    - task: ManualValidation@0
+      timeoutInMinutes: 1440
+      condition: and(succeeded(), ne(variables.reviewinstruction, ''))
+      inputs:
+        notifyUsers: ''
+        instructions: $(reviewinstruction)
+- deployment: deploy_to_${{ parameters.ENVIRONMENT }}_APIM
+  dependsOn: verify_backends
+  displayName: Deploy to ${{ parameters.ENVIRONMENT }} APIM
+  variables:
+    - group: ${{ parameters.VARIABLEGROUP }}
+  pool:
+    vmImage: ubuntu-latest
+  # creates an environment if it doesn't exist
+  environment: 'API Management ${{ lower(parameters.ENVIRONMENT) }}'
+  strategy:
+    # default deployment strategy, more coming...
+    runOnce:
+      deploy:
+        steps:
+          - template: run-publisher-with-env.yaml
+            parameters:
+              API_MANAGEMENT_SERVICE_OUTPUT_FOLDER_PATH: ${{ parameters.API_MANAGEMENT_SERVICE_OUTPUT_FOLDER_PATH }}
+              RESOURCE_GROUP_NAME : $(RESOURCE_GROUP_NAME)
+              CONFIGURATION_YAML_PATH:  $(Build.SourcesDirectory)/${{ parameters.CONFIGURATION_YAML_PATH }}
+              ENVIRONMENT: ${{ parameters.ENVIRONMENT }}
+              COMMIT_ID: ${{ parameters.COMMIT_ID }}

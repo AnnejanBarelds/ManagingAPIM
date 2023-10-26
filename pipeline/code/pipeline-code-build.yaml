@@ -1,0 +1,74 @@
+parameters:
+  - name: BuildConfiguration
+    type: string
+    default: Release
+  - name: ApplicationDirectory
+    type: string
+  - name: ProjectsToDeploy
+    type: object
+
+steps:
+- task: UseDotNet@2
+  inputs:
+    packageType: 'sdk'
+    version: '7.x'
+
+- task: DotNetCoreCLI@2
+  displayName: 'Restore packages'
+  inputs:
+    command: 'restore'
+    projects: '**/*.csproj'
+
+- task: DotNetCoreCLI@2
+  displayName: 'Build'
+  inputs:
+    command: 'build'
+    projects: '**/*.csproj'
+    arguments: '--configuration ${{ parameters.BuildConfiguration }}'
+
+- ${{ each project in parameters.ProjectsToDeploy }}:
+  - ${{ if eq(project.IsAPIBackend, true) }}:
+    - task: PowerShell@2
+      displayName: 'Generate OpenAPI files'
+      inputs:
+        targetType: 'inline'
+        script: |
+          $resultCode = ''
+          $projectFile = Get-ChildItem -Path ${{ parameters.ApplicationDirectory }} -Filter "${{ project.Project }}.csproj" -Recurse
+          $projectDir = Split-Path -Parent $projectFile.FullName
+          Set-Location $projectDir
+          $outputDir =  Join-Path $projectDir 'bin'
+          $dll = Get-ChildItem -Path $outputDir -Filter "${{ project.Project }}.dll" -Recurse
+          dotnet tool restore
+          $err = dotnet swagger tofile --output openapi_v1.yml --yaml $dll probeForVersions 2>&1 | ?{$_.gettype().Name -eq "ErrorRecord"}
+          $errorString = $err[0].ToString()
+          $groups = $errorString | Select-String -Pattern 'Known Swagger documents: (.*)$'
+          $groups.matches.groups[1].Value -split ',' -replace '"','' | ForEach-Object {
+              $version = $_.Trim()
+              dotnet swagger tofile --output openapi_$version.yml --yaml $dll $version
+              $result = $LASTEXITCODE
+              if ($result -ne 0) {
+                  $message = "An error occurred while generating OpenAPI file for version $version"
+                  Write-Warning $message
+                  Write-Host "##vso[task.logissue type=error;]$message"
+              }
+              if (($resultCode -eq 0) -or ($resultCode -eq '')) {
+                  $resultCode = $result
+              }
+          }
+          if ($resultCode -ne 0) {
+              $message = "One or more errors occured while generating OpenAPI files for project ${{ project.Project }}"
+              Write-Warning $message
+              Write-Host "##vso[task.logissue type=error;]$message"
+              Write-Host "##vso[task.complete result=SucceededWithIssues;]"
+          }
+        failOnStderr: false
+      env:
+        ASPNETCORE_ENVIRONMENT: 'SwaggerBuild'
+
+- task: DotNetCoreCLI@2
+  displayName: 'Test'
+  inputs:
+    command: 'test'
+    projects: '**/*Tests.csproj'
+    arguments: '--configuration ${{ parameters.BuildConfiguration }} --collect "Code coverage"'

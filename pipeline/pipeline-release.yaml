@@ -1,0 +1,40 @@
+parameters:
+  - name: Stage
+    type: string
+  - name: SubscriptionName
+    type: string
+  - name: SubscriptionId
+    type: string
+  - name: ArtifactName
+    type: string
+  - name: ApplicationDisplayName
+    type: string
+  - name: ProjectsToDeploy
+    type: object
+  - name: VnetName
+    type: string
+    default: ''
+  - name: BicepParamOverrides
+    type: string
+    default: ''
+
+stages:
+- stage: ${{ parameters.Stage }}
+  jobs:
+    - template: bicep/pipeline-bicep-release.yaml
+      parameters:
+        Stage: ${{ parameters.Stage }}
+        SubscriptionName: ${{ parameters.SubscriptionName }}
+        SubscriptionId: ${{ parameters.SubscriptionId }}
+        ApplicationDisplayName: ${{ parameters.ApplicationDisplayName }}
+        VnetName: ${{ parameters.VnetName }}
+        BicepParamOverrides: ${{ parameters.BicepParamOverrides }}
+
+    - ${{ if ne(convertToJson(parameters.ProjectsToDeploy), '[]') }}:
+      - template: code/pipeline-code-release.yaml
+        parameters:
+          Stage: ${{ parameters.Stage }}
+          SubscriptionName: ${{ parameters.SubscriptionName }}
+          ArtifactName: ${{ parameters.ArtifactName }}
+          ApplicationDisplayName: ${{ parameters.ApplicationDisplayName }}
+          ProjectsToDeploy: ${{ parameters.ProjectsToDeploy }}

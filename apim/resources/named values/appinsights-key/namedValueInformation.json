@@ -1,0 +1,9 @@
+{
+  "properties": {
+    "displayName": "appinsights-key",
+    "keyVault": {
+      "secretIdentifier": "https://kv-apimdemo-dev.vault.azure.net/secrets/APIMLoggerInstrumentationKey"
+    },
+    "secret": true
+  }
+}

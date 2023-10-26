@@ -1,0 +1,33 @@
+apimServiceName: apim-apimdemo-{#ENVIRONMENTSUFFIX#}
+diagnostics:
+  - name: applicationInsights
+    properties:
+      loggerId: /subscriptions/{#AZURE_SUBSCRIPTION_ID#}/resourceGroups/rg-apimdemo-{#ENVIRONMENTSUFFIX#}/providers/Microsoft.ApiManagement/service/apim-apimdemo-{#ENVIRONMENTSUFFIX#}/loggers/appInsightsLogger
+  - name: azuremonitor
+    properties:
+      loggerId: /subscriptions/{#AZURE_SUBSCRIPTION_ID#}/resourceGroups/rg-apimdemo-{#ENVIRONMENTSUFFIX#}/providers/Microsoft.ApiManagement/service/apim-apimdemo-{#ENVIRONMENTSUFFIX#}/loggers/azuremonitor
+loggers:
+  - name: appInsightsLogger
+    properties:
+      resourceId: /subscriptions/{#AZURE_SUBSCRIPTION_ID#}/resourceGroups/rg-apimdemo-{#ENVIRONMENTSUFFIX#}/providers/Microsoft.Insights/components/appi-apim-apimdemo-{#ENVIRONMENTSUFFIX#}
+namedValues:
+  - name: appinsights-key
+    properties:
+      keyVault:
+        secretIdentifier: https://kv-apimdemo-{#ENVIRONMENTSUFFIX#}.vault.azure.net/secrets/APIMLoggerInstrumentationKey
+  - name: gatewayUrl
+    properties:
+      value: https://apim-apimdemo-{#ENVIRONMENTSUFFIX#}.azure-api.net
+apis:
+  - properties:
+      serviceUrl: https://apim-apimdemo-{#ENVIRONMENTSUFFIX#}.azure-api.net/echo
+    name: echo-api
+  - properties:
+      serviceUrl: https://apim-apimdemo-{#ENVIRONMENTSUFFIX#}.azure-api.net/products
+    name: products-api
+backends:
+  - properties:
+      resourceId: https://management.azure.com/subscriptions/{#AZURE_SUBSCRIPTION_ID#}/resourceGroups/rg-apimdemo-productsservice-{#ENVIRONMENTSUFFIX#}/providers/Microsoft.Web/sites/app-products-service-{#ENVIRONMENTSUFFIX#}
+      url: https://app-products-service-{#ENVIRONMENTSUFFIX#}.azurewebsites.net
+      description: app-products-service-{#ENVIRONMENTSUFFIX#}
+    name: app-products-service

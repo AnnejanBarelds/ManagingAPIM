@@ -1,0 +1,20 @@
+{
+  "properties": {
+    "apiRevision": "1",
+    "apiVersionSetId": "/subscriptions/6d972db7-9d22-43d5-80ed-97e5c8b09291/resourceGroups/rg-apimdemo-dev/providers/Microsoft.ApiManagement/service/apim-apimdemo-dev/apiVersionSets/65328bf8f422356878867a9c",
+    "authenticationSettings": {},
+    "description": "API",
+    "displayName": "Products API",
+    "isCurrent": true,
+    "path": "products",
+    "protocols": [
+      "https"
+    ],
+    "serviceUrl": "https://apim-apimdemo-dev.azure-api.net/products",
+    "subscriptionKeyParameterNames": {
+      "header": "Ocp-Apim-Subscription-Key",
+      "query": "subscription-key"
+    },
+    "subscriptionRequired": false
+  }
+}

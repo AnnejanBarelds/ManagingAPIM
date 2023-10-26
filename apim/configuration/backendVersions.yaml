@@ -1,0 +1,3 @@
+backendVersions:
+  - version: "20231020.2"
+    name: app-products-service

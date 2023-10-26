@@ -1,0 +1,69 @@
+parameters:
+  - name: BuildConfiguration
+    type: string
+    default: Release
+  - name: ArtifactName
+    type: string
+  - name: ApplicationName
+    type: string
+  - name: ApplicationDisplayName
+    type: string
+  - name: ApplicationDirectory
+    type: string
+  - name: TemplateDirectory
+    type: string
+  - name: ProjectsToDeploy
+    type: object
+  - name: SubscriptionName
+    type: string
+  - name: SubscriptionId
+    type: string
+  - name: NpmFeed
+    type: string
+
+steps:
+
+- template: code/pipeline-code-build.yaml
+  parameters:
+    ApplicationDirectory: ${{ parameters.ApplicationDirectory }}
+    ProjectsToDeploy: ${{ parameters.ProjectsToDeploy }}
+
+- template: openapi/pipeline-openapi-diff.yaml
+  parameters:
+    ApplicationName: ${{ parameters.ApplicationName }}
+    ApplicationDisplayName: ${{ parameters.ApplicationDisplayName }}
+    NpmFeed: ${{ parameters.NpmFeed }}
+
+- template: bicep/pipeline-bicep-build.yaml
+  parameters:
+    TemplateDirectory: ${{ parameters.TemplateDirectory }}
+    SubscriptionName: ${{ parameters.SubscriptionName }}
+    SubscriptionId: ${{ parameters.SubscriptionId }}
+
+- ${{ each project in parameters.ProjectsToDeploy }}:
+  - ${{ if or(eq(project.AppType, 'webAppLinux'), eq(project.AppType, 'functionAppLinux')) }}:
+    - task: DotNetCoreCLI@2
+      displayName: 'Publish ${{ project.Project }}'
+      inputs:
+        command: publish
+        publishWebProjects: False
+        projects: '**/${{ parameters.ApplicationDirectory }}/**/${{ project.Project }}.csproj'
+        arguments: '--no-build --configuration ${{ parameters.BuildConfiguration }} --output $(Build.ArtifactStagingDirectory)/${{ parameters.ArtifactName }}'
+        zipAfterPublish: True
+  - ${{ else }}:
+    - task: PowerShell@2
+      displayName: 'Warning: unknown project type'
+      inputs:
+        targetType: 'inline'
+        script: Write-Host "##vso[task.logissue type=warning;]Unknown app type $env:APPTYPE for project $env:PROJECT"
+        failOnStderr: true
+      env:
+        PROJECT: ${{ project.Project }}
+        APPTYPE: ${{ project.AppType}}
+
+- task: PublishBuildArtifacts@1
+  displayName: Publish release artifact
+  condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+  inputs:
+    PathtoPublish: '$(Build.ArtifactStagingDirectory)/${{ parameters.ArtifactName }}'
+    ArtifactName: '${{ parameters.ArtifactName }}'

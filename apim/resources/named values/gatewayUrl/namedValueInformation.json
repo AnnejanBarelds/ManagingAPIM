@@ -1,0 +1,7 @@
+{
+  "properties": {
+    "displayName": "gatewayUrl",
+    "secret": false,
+    "value": "https://apim-apimdemo-dev.azure-api.net"
+  }
+}

@@ -1,0 +1,68 @@
+parameters:
+  - name: Stage
+    type: string
+  - name: SubscriptionName
+    type: string
+  - name: ArtifactName
+    type: string
+  - name: ApplicationDisplayName
+    type: string
+  - name: ProjectsToDeploy
+    type: object
+
+jobs:
+- deployment: Code
+  dependsOn: Bicep
+  variables:
+    deploymentOutput: $[ dependencies.Bicep.outputs['Bicep.bicepOutput.deploymentOutput'] ] 
+  displayName: "Deploy app(s)"
+  environment:
+    name: ${{ parameters.ApplicationDisplayName }} ${{ lower(parameters.Stage) }}
+  strategy:
+    runOnce:
+      deploy:
+        steps:
+          - download: none
+
+          - task: PowerShell@2
+            displayName: "Translate Bicep output variables"
+            inputs:
+              targetType: inline
+              pwsh: true
+              script: |
+                $bicepOutputObj = '$(deploymentOutput)' | ConvertFrom-Json
+                $bicepOutputObj.PSObject.Properties | ForEach-Object {
+                  $keyname = $_.Name
+                  $value = $_.Value.value
+                  Write-Host "##vso[task.setvariable variable=$keyName;]$value"
+                }
+
+          - task: DownloadBuildArtifacts@0
+            displayName: Download ${{ parameters.ArtifactName }} artifact
+            inputs:
+              buildType: 'current'
+              downloadType: 'single'
+              artifactName: '${{ parameters.ArtifactName }}'
+              downloadPath: '$(System.ArtifactsDirectory)'
+
+          - ${{ each project in parameters.ProjectsToDeploy }}:
+            - ${{ if eq(project.AppType, 'webAppLinux') }}:
+              - task: AzureWebApp@1
+                displayName: 'Deploy web app'
+                inputs:
+                  ConnectionType: 'AzureRM'
+                  azureSubscription: '${{ parameters.SubscriptionName }}'
+                  appType: '${{ project.AppType }}'
+                  appName: '$(${{ project.ResourceNameBicepOutputKey }})'
+                  package: '$(System.ArtifactsDirectory)/${{ parameters.ArtifactName }}/${{ project.Project }}.zip'
+                  runtimeStack: 'DOTNETCORE|7.0'
+            - ${{ else }}:
+              - task: PowerShell@2
+                displayName: 'Error: unknown project type'
+                inputs:
+                  targetType: 'inline'
+                  script: Write-Host "##vso[task.logissue type=error;]Cannot deploy; unknown app type $env:APPTYPE for project $env:PROJECT"
+                  failOnStderr: true
+                env:
+                  PROJECT: ${{ project.Project }}
+                  APPTYPE: ${{ project.AppType}}

@@ -1,0 +1,121 @@
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+    - apim/*
+
+parameters:
+  - name: API_MANAGEMENT_SERVICE_OUTPUT_FOLDER_PATH
+    type: string
+    displayName: Folder where the artifacts reside
+    default: "apim/resources"
+  - name: CONFIGURATION_YAML_PATH
+    type: string
+    displayName: Publisher configuration file
+    default: apim/configuration/configuration.publisher.yaml
+  - name: BACKEND_VERSION_YAML_PATH
+    type: string
+    displayName: Backend version file
+    default: apim/configuration/backendVersions.yaml
+  - name: COMMIT_ID
+    type: string
+    displayName: Choose "publish-all-artifacts-in-repo" only when you want to force republishing all artifacts (e.g. after build failure). Otherwise stick with the default behavior of "publish-artifacts-in-last-commit"
+    default: publish-artifacts-in-last-commit
+    values:
+      - publish-artifacts-in-last-commit
+      - publish-all-artifacts-in-repo
+
+variables:
+  - group: apim-automation
+  - name: System.Debug
+    value: true
+
+stages:
+  - stage: openapi_diff
+    displayName: Determine OpenAPI Diff
+    jobs:
+      - job: openapi_diff
+        displayName: Determine OpenAPI Diff
+        steps:
+          - template: ../openapi/pipeline-openapi-diff.yaml
+            parameters:
+              ApplicationName: APIM
+              ApplicationDisplayName: API Management
+              OpenAPIFileNamePattern: '**/specification.yaml'
+              NpmFeed: ManagingAPIM/ManagingAPIM
+  - ${{ if ne(variables['Build.Reason'], 'PullRequest') }}:
+    - stage: determine_commit_id
+      displayName: Determine commit id to use
+      jobs:
+        - job: determine_commit_id
+          displayName: Determine commit id to use
+          pool:
+            vmImage: ubuntu-latest
+          steps:
+            - ${{ if eq( parameters['COMMIT_ID'], 'publish-artifacts-in-last-commit' ) }}:
+              - checkout: self
+                fetchDepth: 0
+              - task: PowerShell@2
+                name: determine_commit_id
+                displayName: Determine commit id to use
+                inputs:
+                  targetType: "inline"
+                  script: |
+                    Set-StrictMode -Version Latest
+                    $ErrorActionPreference = "Stop"
+                    $VerbosePreference = "Continue"
+                    $InformationPreference = "Continue"
+
+                    $path = $env:API_MANAGEMENT_SERVICE_OUTPUT_FOLDER_PATH
+                    Write-Information "Finding most recent commit id for folder $path..."
+                    $workingFolder = Join-Path $(Build.SourcesDirectory) $path
+                    
+                    $commitid = git -c http.extraheader="AUTHORIZATION: Bearer $(System.AccessToken)" -C $workingFolder log $(Build.SourceVersion) --pretty=format:"%H" -n1 .
+
+                    echo "##vso[task.setvariable variable=APIM_COMMIT_ID;isoutput=true]$commitid"
+                env:
+                  API_MANAGEMENT_SERVICE_OUTPUT_FOLDER_PATH: ${{ parameters.API_MANAGEMENT_SERVICE_OUTPUT_FOLDER_PATH }}
+    - stage: push_changes_to_Dev_APIM
+      dependsOn: determine_commit_id
+      displayName: Push changes to Dev APIM
+      jobs:
+        - job: push_changes_to_Dev_APIM
+          displayName: Push changes to Dev APIM
+          variables:
+            APIM_COMMIT_ID: $[ stageDependencies.determine_commit_id.determine_commit_id.outputs['determine_commit_id.APIM_COMMIT_ID'] ]
+          pool:
+            vmImage: ubuntu-latest
+          steps:
+            - template: run-publisher-with-env.yaml
+              parameters:
+                API_MANAGEMENT_SERVICE_OUTPUT_FOLDER_PATH: ${{ parameters.API_MANAGEMENT_SERVICE_OUTPUT_FOLDER_PATH }}
+                RESOURCE_GROUP_NAME : $(RESOURCE_GROUP_NAME)
+                API_MANAGEMENT_SERVICE_NAME : $(APIM_NAME)
+                ENVIRONMENT: "Dev"
+                ${{ if ne(variables['APIM_COMMIT_ID'], '') }}:
+                  COMMIT_ID: $(APIM_COMMIT_ID)
+                ${{ else }}:
+                  COMMIT_ID: 'publish-all-artifacts-in-repo'
+  - ${{ if and(ne(variables['Build.Reason'], 'PullRequest'), eq(variables['Build.SourceBranch'], 'refs/heads/main')) }}:
+    - stage: deploy_to_Test_APIM
+      dependsOn:
+      - determine_commit_id
+      - push_changes_to_Dev_APIM
+      displayName: Deploy to Test APIM
+      variables:
+        APIM_COMMIT_ID: $[ stageDependencies.determine_commit_id.determine_commit_id.outputs['determine_commit_id.APIM_COMMIT_ID'] ]
+      jobs:
+        - template: check-and-run-publisher-with-env.yaml
+          parameters:
+            VARIABLEGROUP: apim-automation-test
+            ENVIRONMENT: Test
+            API_MANAGEMENT_SERVICE_OUTPUT_FOLDER_PATH: ${{ parameters.API_MANAGEMENT_SERVICE_OUTPUT_FOLDER_PATH }}
+            CONFIGURATION_YAML_PATH: ${{ parameters.CONFIGURATION_YAML_PATH }}
+            BACKEND_VERSION_YAML_PATH: ${{ parameters.BACKEND_VERSION_YAML_PATH }}
+            ${{ if ne(variables['APIM_COMMIT_ID'], '') }}:
+              COMMIT_ID: $(APIM_COMMIT_ID)
+            ${{ else }}:
+              COMMIT_ID: 'publish-all-artifacts-in-repo'
+              

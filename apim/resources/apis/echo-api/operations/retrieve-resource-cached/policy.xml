@@ -1,0 +1,17 @@
+<policies>
+	<inbound>
+		<base />
+		<cache-lookup vary-by-developer="false" vary-by-developer-groups="false">
+			<vary-by-header>Accept</vary-by-header>
+			<vary-by-header>Accept-Charset</vary-by-header>
+		</cache-lookup>
+		<rewrite-uri template="/resource" />
+	</inbound>
+	<backend>
+		<base />
+	</backend>
+	<outbound>
+		<base />
+		<cache-store duration="3600" />
+	</outbound>
+</policies>

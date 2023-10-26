@@ -1,0 +1,6 @@
+{
+  "properties": {
+    "isBuffered": true,
+    "loggerType": "azureMonitor"
+  }
+}

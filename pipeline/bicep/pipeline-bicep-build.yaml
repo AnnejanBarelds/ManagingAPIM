@@ -1,0 +1,51 @@
+parameters:
+  - name: TemplateDirectory
+    type: string
+  - name: TemplateFileName
+    type: string
+    default: 'main.bicep'
+  - name: SubscriptionName
+    type: string
+  - name: SubscriptionId
+    type: string
+  - name: DeploymentValidationLocation
+    type: string
+    default: 'West Europe'
+  - name: DeploymentValidationEnvironment
+    type: string
+    default: dev
+
+steps:
+- task: CopyFiles@2
+  displayName: 'Copy ARM parameter files'
+  inputs:
+    SourceFolder: '$(Build.SourcesDirectory)/${{ parameters.TemplateDirectory }}/parameters'
+    Contents: '**'
+    TargetFolder: '$(build.artifactstagingdirectory)/Bicep/templates/parameters'
+
+- task: AzureCLI@2
+  displayName: 'Transpile Bicep into ARM'
+  inputs:
+    azureSubscription: ${{ parameters.SubscriptionName }}
+    scriptType: 'pscore'
+    scriptLocation: 'inlineScript'
+    inlineScript: 'az bicep build --file $(Build.SourcesDirectory)/${{ parameters.TemplateDirectory }}/${{ parameters.TemplateFileName }} --outfile $(build.artifactstagingdirectory)/Bicep/templates/main.json'
+
+- task: AzureResourceManagerTemplateDeployment@3
+  displayName: 'Validate ARM template'
+  inputs:
+    deploymentScope: 'Subscription'
+    azureResourceManagerConnection: ${{ parameters.SubscriptionName }}
+    subscriptionId: ${{ parameters.SubscriptionId }}
+    location: ${{ parameters.DeploymentValidationLocation }}
+    templateLocation: 'Linked artifact'
+    csmFile: '$(build.artifactstagingdirectory)/Bicep/templates/main.json'
+    csmParametersFile: '$(build.artifactstagingdirectory)/Bicep/templates/parameters/parameters.${{ parameters.DeploymentValidationEnvironment }}.json'
+    deploymentMode: 'Validation'
+
+- task: PublishBuildArtifacts@1
+  displayName: Publish Bicep template
+  condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))
+  inputs:
+    PathtoPublish: '$(Build.ArtifactStagingDirectory)/Bicep'
+    ArtifactName: 'Bicep'

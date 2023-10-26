@@ -1,0 +1,72 @@
+parameters:
+- name: ArtifactName
+  type: string
+  default: Products
+- name: ApplicationName
+  type: string
+  default: Products
+- name: ApplicationDisplayName
+  type: string
+  default: Products
+- name: ApplicationDirectory
+  type: string
+  default: src/API
+- name: TemplateDirectory
+  type: string
+  default: src/pipeline
+- name: ProjectsToDeploy
+  type: object
+  default:
+  - Project: API
+    ResourceNameBicepOutputKey: webAppName
+    AppType: webAppLinux
+    IsAPIBackend: true
+
+trigger:
+  branches:
+    include:
+    - main
+  paths:
+    include:
+    - src/**
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+- stage: "Build"
+  jobs:
+    - job: Build
+      displayName: "Build"
+      steps:
+        - template: ../../pipeline/pipeline-build.yaml
+          parameters:
+            ArtifactName: ${{ parameters.ArtifactName }}
+            ApplicationName: ${{ parameters.ApplicationName }}
+            ApplicationDisplayName: ${{ parameters.ApplicationDisplayName }}
+            ApplicationDirectory: ${{ parameters.ApplicationDirectory }}
+            TemplateDirectory: ${{ parameters.TemplateDirectory }}
+            SubscriptionName: ''
+            SubscriptionId: ''
+            ProjectsToDeploy: ${{ parameters.ProjectsToDeploy }}
+            NpmFeed: ManagingAPIM/ManagingAPIM
+- ${{ if ne(variables['Build.Reason'], 'PullRequest') }}:
+  - template: ../../pipeline/pipeline-release.yaml
+    parameters:
+      Stage: Dev
+      SubscriptionName: ''
+      SubscriptionId: ''
+      ArtifactName: ${{ parameters.ArtifactName }}
+      ApplicationDisplayName: ${{ parameters.ApplicationDisplayName }}
+      ProjectsToDeploy: ${{ parameters.ProjectsToDeploy }}
+      BicepParamOverrides: '-tags {"Version": "$(Build.BuildNumber)"}'
+- ${{ if and(ne(variables['Build.Reason'], 'PullRequest'), eq(variables['Build.SourceBranch'], 'refs/heads/main')) }}:
+  - template: ../../pipeline/pipeline-release.yaml
+    parameters:
+      Stage: Test
+      SubscriptionName: ''
+      SubscriptionId: ''
+      ArtifactName: ${{ parameters.ArtifactName }}
+      ApplicationDisplayName: ${{ parameters.ApplicationDisplayName }}
+      ProjectsToDeploy: ${{ parameters.ProjectsToDeploy }}
+      BicepParamOverrides: '-tags {"Version": "$(Build.BuildNumber)"}'
