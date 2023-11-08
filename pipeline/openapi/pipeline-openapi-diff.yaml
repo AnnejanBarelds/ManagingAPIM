@@ -134,6 +134,7 @@ steps:
         echo "##vso[task.setvariable variable=diffresultcode]$returnCode"
         if ($returnCode -ne 0) {
           Write-Host "##vso[task.complete result=SucceededWithIssues;]"
+          Exit 0
         }
       }
     workingDirectory: '$(Agent.BuildDirectory)'

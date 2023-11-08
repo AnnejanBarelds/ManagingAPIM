@@ -64,8 +64,8 @@ resource apim 'Microsoft.ApiManagement/service@2022-09-01-preview' = {
     type: 'SystemAssigned'
   }
   properties: {
-    publisherEmail: 'beheer@customer.com'
-    publisherName: 'Customer.com'
+    publisherEmail: 'beheer@example.com'
+    publisherName: 'Example.com'
     virtualNetworkType: 'Internal'
     publicIpAddressId: publicIPAddress.outputs.id
     apiVersionConstraint: {
